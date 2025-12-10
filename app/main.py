@@ -1,5 +1,8 @@
-from fastapi import FastAPI
-from app.schemas import EchoRequest, EchoResponse
+from fastapi import FastAPI, HTTPException
+from openai import OpenAI
+
+from app.config import get_env
+from app.schemas import EchoRequest, EchoResponse, ChatRequest, ChatResponse
 
 app = FastAPI(
     title="Senior Support API",
@@ -12,6 +15,10 @@ def health_check():
     return {"status": "ok"}
 
 
+openai_client = OpenAI(api_key=get_env("OPENAI_API_KEY"))
+model_name = get_env("OPENAI_MODEL", "gpt-4o-mini")
+
+
 @app.post("/echo", response_model=EchoResponse)
 def echo(payload: EchoRequest):
     """
@@ -19,3 +26,20 @@ def echo(payload: EchoRequest):
     Just echoes whatever JSON is sent.
     """
     return {"echoed": payload.data}
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(payload: ChatRequest):
+    try:
+        completion = openai_client.chat.completions.create(
+            model=model_name,
+            messages=[message.model_dump() for message in payload.messages]
+        )
+    except Exception as exc:
+        # Surface an actionable HTTP error when the upstream call fails.
+        raise HTTPException(status_code=502, detail="OpenAI request failed") from exc
+
+    if not completion.choices:
+        raise HTTPException(status_code=502, detail="OpenAI returned no choices")
+
+    return {"response": completion.choices[0].message.content}
