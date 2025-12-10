@@ -13,7 +13,7 @@ app = FastAPI(
     version="0.1.0"
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 
 @app.get("/health")
