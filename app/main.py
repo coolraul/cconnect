@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from typing import Optional
+
+from fastapi import FastAPI, HTTPException, Header
 from openai import OpenAI
 
 from app.config import get_env
@@ -17,6 +19,10 @@ def health_check():
 
 openai_client = OpenAI(api_key=get_env("OPENAI_API_KEY"))
 model_name = get_env("OPENAI_MODEL", "gpt-4o-mini")
+chat_shared_secret = get_env("CHAT_SHARED_SECRET")
+
+if not chat_shared_secret:
+    raise RuntimeError("CHAT_SHARED_SECRET must be set")
 
 
 @app.post("/echo", response_model=EchoResponse)
@@ -29,7 +35,10 @@ def echo(payload: EchoRequest):
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest):
+def chat(payload: ChatRequest, x_chat_secret: Optional[str] = Header(default=None, alias="X-Chat-Secret")):
+    if x_chat_secret != chat_shared_secret:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
     try:
         completion = openai_client.chat.completions.create(
             model=model_name,
