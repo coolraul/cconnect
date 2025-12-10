@@ -1,5 +1,7 @@
 from typing import Optional
 
+import logging
+
 from fastapi import FastAPI, HTTPException, Header
 from openai import OpenAI
 
@@ -10,6 +12,8 @@ app = FastAPI(
     title="Senior Support API",
     version="0.1.0"
 )
+
+logger = logging.getLogger(__name__)
 
 
 @app.get("/health")
@@ -38,6 +42,8 @@ def echo(payload: EchoRequest):
 def chat(payload: ChatRequest, x_chat_secret: Optional[str] = Header(default=None, alias="X-Chat-Secret")):
     if x_chat_secret != chat_shared_secret:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    logger.info("Client message contents: %s", [message.content for message in payload.messages])
 
     try:
         completion = openai_client.chat.completions.create(
