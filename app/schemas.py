@@ -1,17 +1,11 @@
 from pydantic import BaseModel
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
-
-class EchoRequest(BaseModel):
-    data: Dict[str, Any]
-
-
-class EchoResponse(BaseModel):
-    echoed: Dict[str, Any]
+Role = Literal["system", "user", "assistant"]
 
 
 class ChatMessage(BaseModel):
-    role: str
+    role: Role
     content: str
 
 
@@ -20,4 +14,4 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    response: str
+    reply: str

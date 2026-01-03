@@ -1,12 +1,16 @@
 from typing import Optional
 
 import logging
+import json
 
 from fastapi import FastAPI, HTTPException, Header
 from openai import OpenAI
 
 from app.config import get_env
 from app.schemas import EchoRequest, EchoResponse, ChatRequest, ChatResponse
+from app.openai_tools import search_videos_tool
+from app.youtube import youtube_search
+
 
 app = FastAPI(
     title="Senior Support API",
@@ -38,23 +42,57 @@ def echo(payload: EchoRequest):
     return {"echoed": payload.data}
 
 
+
 @app.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest, x_chat_secret: Optional[str] = Header(default=None, alias="X-Chat-Secret")):
-    if x_chat_secret != chat_shared_secret:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+def chat(req: ChatRequest):
+    # Convert Pydantic objects to plain dicts for OpenAI
+    messages = [m.model_dump() for m in req.messages]
 
-    logger.info("Client message contents: %s", [message.content for message in payload.messages])
+    # 1) First call: allow tool usage
+    first = openai_client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        tools=[search_videos_tool],
+        tool_choice="auto",
+    )
 
-    try:
-        completion = openai_client.chat.completions.create(
-            model=model_name,
-            messages=[message.model_dump() for message in payload.messages]
-        )
-    except Exception as exc:
-        # Surface an actionable HTTP error when the upstream call fails.
-        raise HTTPException(status_code=502, detail="OpenAI request failed") from exc
+    msg = first.choices[0].message
 
-    if not completion.choices:
-        raise HTTPException(status_code=502, detail="OpenAI returned no choices")
+    # If no tool calls, return direct response
+    if not msg.tool_calls:
+        return ChatResponse(reply=msg.content or "")
 
-    return {"response": completion.choices[0].message.content}
+    # 2) Handle tool calls (support multiple, but you’ll likely have one)
+    tool_messages = []
+    for tc in msg.tool_calls:
+        tool_name = tc.function.name
+        tool_args = json.loads(tc.function.arguments)
+
+        if tool_name == "search_videos":
+            print("calling tool!!")
+
+            query = tool_args["query"]
+            videos = youtube_search(query, max_results=3)
+            tool_output = json.dumps(videos)
+        else:
+            tool_output = json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+        tool_messages.append({
+            "role": "tool",
+            "tool_call_id": tc.id,
+            "name": tool_name,
+            "content": tool_output,
+        })
+
+    # 3) Second call: provide the tool outputs so model can answer
+    second = openai_client.chat.completions.create(
+        model=model_name,
+        messages=[
+            *messages,
+            msg,              # assistant message containing tool_calls
+            *tool_messages,   # tool outputs
+        ],
+    )
+
+    final_msg = second.choices[0].message
+    return ChatResponse(reply=final_msg.content or "")
