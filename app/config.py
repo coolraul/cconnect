@@ -3,5 +3,5 @@ import os
 
 load_dotenv()
 
-def get_env(name: str, default=None):
+def get_env(name: str, default=""):
     return os.getenv(name, default)

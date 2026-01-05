@@ -1,15 +1,19 @@
-from typing import Optional
-
 import logging
 import json
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI 
 from openai import OpenAI
 
 from app.config import get_env
-from app.schemas import EchoRequest, EchoResponse, ChatRequest, ChatResponse
+from app.schemas import ChatRequest, ChatResponse, to_openai_messages
 from app.openai_tools import search_videos_tool
 from app.youtube import youtube_search
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionMessageFunctionToolCallParam,
+    ChatCompletionMessageParam,
+    ChatCompletionToolMessageParam,
+)
 
 
 app = FastAPI(
@@ -33,20 +37,10 @@ if not chat_shared_secret:
     raise RuntimeError("CHAT_SHARED_SECRET must be set")
 
 
-@app.post("/echo", response_model=EchoResponse)
-def echo(payload: EchoRequest):
-    """
-    Test endpoint for Replit JS client.
-    Just echoes whatever JSON is sent.
-    """
-    return {"echoed": payload.data}
-
-
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    # Convert Pydantic objects to plain dicts for OpenAI
-    messages = [m.model_dump() for m in req.messages]
+    messages: list[ChatCompletionMessageParam] = to_openai_messages(req)
 
     # 1) First call: allow tool usage
     first = openai_client.chat.completions.create(
@@ -63,34 +57,59 @@ def chat(req: ChatRequest):
         return ChatResponse(reply=msg.content or "")
 
     # 2) Handle tool calls (support multiple, but you’ll likely have one)
-    tool_messages = []
+    tool_call_params: list[ChatCompletionMessageFunctionToolCallParam] = []
+    tool_messages: list[ChatCompletionToolMessageParam] = []
     for tc in msg.tool_calls:
-        tool_name = tc.function.name
-        tool_args = json.loads(tc.function.arguments)
+        if tc.type != "function":
+            logger.warning("Unsupported tool call type: %s", tc.type)
+            continue
+
+        func_call = tc.function
+        tool_name = func_call.name
+        tool_args = json.loads(func_call.arguments)
 
         if tool_name == "search_videos":
-            print("calling tool!!")
 
             query = tool_args["query"]
+            print(f"calling tool!! query = {query}")
+
             videos = youtube_search(query, max_results=3)
             tool_output = json.dumps(videos)
         else:
             tool_output = json.dumps({"error": f"Unknown tool: {tool_name}"})
 
-        tool_messages.append({
-            "role": "tool",
-            "tool_call_id": tc.id,
-            "name": tool_name,
-            "content": tool_output,
-        })
+        tool_call_params.append(
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": func_call.arguments,
+                },
+            }
+        )
+
+        tool_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": tool_output,
+            }
+        )
 
     # 3) Second call: provide the tool outputs so model can answer
+    assistant_message: ChatCompletionAssistantMessageParam = {
+        "role": "assistant",
+        "content": msg.content,
+        "tool_calls": tool_call_params,
+    }
+
     second = openai_client.chat.completions.create(
         model=model_name,
         messages=[
             *messages,
-            msg,              # assistant message containing tool_calls
-            *tool_messages,   # tool outputs
+            assistant_message,  # assistant message containing tool_calls
+            *tool_messages,     # tool outputs
         ],
     )
 

@@ -3,5 +3,13 @@
 		{
 			"path": "."
 		}
-	]
+	],
+	"settings": {
+		// Force Pylance to flag unresolved imports/symbols
+		"python.analysis.typeCheckingMode": "basic",
+		"python.analysis.diagnosticSeverityOverrides": {
+			"reportMissingImports": "error",
+			"reportMissingModuleSource": "error"
+		}
+	}
 }
